@@ -1,0 +1,239 @@
+---
+title: "4: Portfolio optimization and the efficient frontier"
+format: 
+  html: 
+    embed-resources: true
+editor: visual
+---
+
+## Portfolio efficiency - optimal allocation
+
+It's one thing to use fundamental and technical analysis to determine *which* stocks to include in a portfolio, but it is quite another to determine how to allocate investment dollars across the basket of stocks (or other assets) efficiently. What do we mean by efficiency? If we have a portfolio of AAPL and WMT, how much do we invest in AAPL? How much do we invest in WMT?
+
+Portfolio optimization is achieved, assuming we are working for a typical risk-averse investor, when the combination of weights (dollars invested) results in the highest possible return for the least amount of risk. Remember, when we speak of "risk" in investments we are speaking of the probability that when we need the money, it's not there - the price of the stock or stocks went down considerably. Technically, risk is measured by the standard deviation of returns, the "volatility" of the stock price. The greater the standard deviation of returns, the greater the probability that the stock price will be lower than we want when it counts - when we want to cash out. Consider a hard working person who has invested her entire career. She is looking forward to retiring with a sizable portfolio...in 2008. When 2008 arrived, guess what? Her portfolio was worth a fraction of what she expected it to be worth. She, like many others, postponed retirement.
+
+This lesson will discuss, and code, the optimization of a portfolio consisting of the components of the Dow Jones index. We will find the minimum variance portfolio, find the vector of weights that minimizes risk for a given expected target return, and visualize the efficient frontier. This lesson is adapted from [*Tidy Finance*](https://www.tidy-finance.org/r/). It's a lot. Let's get going.
+
+### Load libraries, grab DOW component prices
+
+Let's first load the libraries that we'll use throughout this lesson. You should be used to this by now. We're also going to use the `scales` package, which helps with formatting and labeling plots. If you don't have it installed, do the usual in the Console: `install.packages("scales")`.
+
+```{r}
+#| label: load-libraries
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(tidyquant)
+library(scales)
+```
+
+### Grab data, create tibbles
+
+Using `tidyquant`, we'll pull in the stock symbols of the DOW. We're going to pull in 10 years of data looking backwards from today. To make that window, we'll create a variable `today` using the `Sys.Date()` function and another variable `years10` that will find the date that is 10 years ago from today. Finally, we'll get stock prices for each of the tickers in `ticker` for our 10 year period.
+
+```{r}
+#| label: stock-prices
+#| warning: false
+#| message: false
+
+# create a list of stocks in the DOW
+ticker <- tq_index("DOW")
+
+# create reference time variables for our window
+today   <- Sys.Date()
+years10 <- today %m-% years(10)
+
+# create a tibble of 10 years of stock prices for each DOW component
+index_prices <- tq_get(ticker,
+                       get  = "stock.prices",
+                       from = years10,
+                       to   = today)
+```
+
+Oops. Time to do a little data cleaning. We noted previously that pulling down the DOW gives us 31 tickers, because it includes `US DOLLAR` as a ticker. We (meaning I, but it's a good excuse for another reminder) forgot about it. We don't want dollar data in our index prices. We can clean our prices tibble by filtering the dataset to include everything BUT the dollar, even after the fact. You will do a lot of "after the fact" cleaning, reshaping, etc. in data science. May as well get some practice. Let's overwrite our prices tibble, dropping observations with the dollar:
+
+```{r}
+#| label: remove-dollar
+#| warning: false
+
+index_prices <- index_prices |>
+    filter(company != "US DOLLAR")
+```
+
+If you click on the `index_prices` tibble you can make sure no DOLLAR observations are present by searching for it in the upper left corner of this screen. You should find no observations.
+
+### Sorting, grouping, and transforming data
+
+We're going to create a balanced panel, dropping observations where we don't have complete data for all trading days. We group by `symbol`, count the number of observations for each ticker, then keep only those tickers with the maximum count. The modern tidyverse way is to use the `.by` argument in `mutate()` and skip the `group_by()`/`ungroup()` dance entirely.
+
+```{r}
+#| label: drop-missing
+#| warning: false
+
+index_prices <- index_prices |>
+    mutate(n = n(), .by = symbol) |>
+    filter(n == max(n)) |>
+    select(-n)
+```
+
+We want monthly, not daily, returns for this exercise. To create monthly returns we'll compute the return in each month for each symbol using `tq_transmute`. We'll keep the adjusted-close based return and drop the redundant price column.
+
+```{r}
+#| label: monthly-returns
+#| warning: false
+
+returns <- index_prices |>
+    mutate(month = floor_date(date, "month")) |>
+    summarise(price = last(adjusted),
+              .by = c(symbol, month)) |>
+    arrange(symbol, month) |>
+    mutate(ret = price / lag(price) - 1,
+           .by = symbol) |>
+    drop_na(ret) |>
+    select(-price)
+```
+
+We use the adjusted price series so returns account for dividends and splits.
+
+### Mu and Sigma - on the way to portfolio optimization
+
+What we need for portfolio optimization is the risk-return relationships of the stocks (or other assets) in our portfolio. Average monthly returns for the stocks in our portfolio over our 10-year period are represented by `mu`, pronounced "mew", like a cat's meow. We will create a vector of average returns. We will also create a matrix called the variance-covariance matrix, which measures the risk of each stock (the variance) and the covariance amongst pairs of stocks. Covariance is a measure of how two assets' returns move together. Lower covariance between two stocks means that their returns don't act the same way (relative to higher covariance pairs), and this can lead to better diversification of the portfolio. If two stocks in a portfolio have lower covariance we would expect to retain a good amount of the returns from the two stocks, but the risk would be smoothed somewhat because the two assets are not doing the same thing at the same time. This is the magic of diversification - higher returns overall for lower risk to the investor. `Sigma` symbolizes risk in portfolio optimization. I won't include the matrix algebra or formulae here, as it is beyond the scope of this course, but interested students are referred again to [*Tidy Finance*](https://www.tidy-finance.org/r/introduction-to-tidy-finance.html#portfolio-choice-problems) for the formulae.
+
+Portfolio optimization uses historical data to create a reasonable expectation of the future. Think about it. If a stock returns `x` on average, it is rational to expect that, on average, the stock will return `x` again next period. It's the same with the risk calculation. If the stock displayed `y` of `sigma` over the recent time period we're using, it is rational to expect the same next period. We use these data, called estimates of sample moments, to strategically deploy our investment dollars next period. Note that `mu` and `Sigma` will change slightly with each new observation - trading day, month, year, etc. The newest observation is added to our dataset and the oldest observation is dropped. We recalculate everything, and rebalance our portfolio to reflect the most recent estimates. Thus, portfolio optimization is a continual process; as returns data changes over time, so will our portfolio weights (the amount of dollars allocated to each asset in our portfolio).
+
+#### Calculate average returns and the variance-covariance matrix
+
+We're going to create a vector of average returns for each stock, `mu`, and the variance-covariance matrix. `pivot_wider` creates new columns where the symbol is the column whilst setting the values to returns. I should note, just for fun, that calculating the variance-covariance matrix can be done in Excel, but it is a very cumbersome process. R shines with complex things. We calculate it here with one very short line of code, `cov(returns_matrix)`.
+
+```{r}
+#| label: matrix-calcs
+#| warning: false
+
+returns_matrix <- returns |>
+    pivot_wider(names_from = symbol, values_from = ret) |>
+    select(-month) |>
+    drop_na()
+
+Sigma <- cov(returns_matrix)
+mu    <- colMeans(returns_matrix)
+```
+
+Note that `mu` is a vector, and therefore falls under `Values` in your **Variables panel** (it's just one value per stock, the average monthly return for each stock over the past 10 years). On the other hand, `Sigma` is a matrix because it has columns and rows. Let's take a look by clicking on `Sigma` in the Variables panel. In the most upper-left observation, AAPL is compared to AAPL - thus, the number is the variance of AAPL returns over the time period. In the cell immediately to the right of that observation, AAPL returns and AMGN returns are compared, and we see a much lower number. The covariance of AAPL and AMGN is lower than that of either AAPL or AMGN by itself - proof that the returns of these stocks are not doing the same thing at the same time, which also means that putting both of these stocks in a portfolio will lower the overall risk of the portfolio. Hooray, diversification.
+
+### The minimum variance portfolio
+
+The main idea behind portfolio optimization is to find the optimal combination of assets that provides the highest expected return for a given level of risk or, conversely, the lowest risk for a given level of expected return. The minimum variance portfolio focuses solely on minimizing the portfolio's risk, irrespective of the expected returns.
+
+We're first going to find the minimum variance portfolio of our DOW stocks, wherein we solve an equation that finds the portfolio with the least amount of risk given the stocks in our portfolio. The return is that which we should expect with the least amount of risk. What we are going to get is an expected return and expected risk (the square root of the portfolio volatility) and the vector of weights that would achieve that risk-return relationship. In other words, the weights are the percentage of our dollars that we would invest in each of the portfolio stocks to expect the minvar return next period. We will also set a restriction that we *must* invest all of our capital - the sum of the weights must equal 1 (or 100% of our dollars).
+
+```{r}
+#| label: find-minvar
+#| warning: false
+
+N           <- ncol(returns_matrix)
+iota        <- rep(1, N)
+mvp_weights <- solve(Sigma) %*% iota
+mvp_weights <- mvp_weights / sum(mvp_weights)
+
+tibble(
+    average_ret = as.numeric(t(mvp_weights) %*% mu),
+    volatility  = as.numeric(sqrt(t(mvp_weights) %*% Sigma %*% mvp_weights))
+)
+```
+
+We solved the equation and created a tibble of return and risk. As of this writing, our minimum variance portfolio is expected to return roughly 1% per month (pretty good) with an expected risk of an up/down move of around 3% per month. If you click `mvp_weights` in the Variables panel you will see the vector of weights that is expected to produce this result. Each observation is the percentage of investment dollars that should be allocated to the corresponding stock. Note that there are negative values in there - the minvar portfolio shorts stocks. You can also set a constraint in the solve function that does not allow negative values, meaning no short sales (you either buy the stock or you don't - something that is reasonable for the average investor), but we'll not do that here.
+
+### Real world optimization: minimize risk given a target return
+
+In the real world of investment management you have different portfolios for different reasons, and different levels of risk for each. You'd have a "safe" portfolio, for example - maybe even cash or T-bills - for things that you cannot risk (e.g. paying your mortgage or your kid's school). But an investment portfolio necessarily will be riskier because you want it to grow. We can find a vector of weights that minimizes risk for a target return. What if, for example, for our retirement fund we wanted a target return that was three times greater than that of the minvar portfolio? Let's instead solve for that. Don't get too caught up in the code here. Yes, this is a coding course (sort of), but the concept - and the knowledge that you can do such things in R - is more important than getting stuck in details.
+
+First, we'll create `mu_bar`, which will be the target expected return that is three times our minvar return. Then we'll find `efp_weights`, which is the vector of portfolio weightings that reaches that return for the least amount of risk.
+
+```{r}
+#| label: target-return
+#| warning: false
+
+mu_bar <- 3 * as.numeric(t(mvp_weights) %*% mu)
+
+C <- as.numeric(t(iota) %*% solve(Sigma) %*% iota)
+D <- as.numeric(t(iota) %*% solve(Sigma) %*% mu)
+E <- as.numeric(t(mu)   %*% solve(Sigma) %*% mu)
+
+lambda_tilde <- as.numeric(2 * (mu_bar - D / C) / (E - D^2 / C))
+
+efp_weights <- mvp_weights +
+    lambda_tilde / 2 * (solve(Sigma) %*% mu - D * mvp_weights)
+
+# what does the risk return relationship look like now?
+tibble(
+    average_ret = as.numeric(t(efp_weights) %*% mu),
+    volatility  = as.numeric(sqrt(t(efp_weights) %*% Sigma %*% efp_weights))
+)
+```
+
+We can see from the tibble output that our expected return is indeed three times greater than the minvar portfolio expected return. That was the easy part. Interestingly, and importantly, we also see that the expected volatility is only slightly higher than before - with three times the expected return. Take a look at the vector of weights by clicking `efp_weights` in the Environment. At the time of this writing, the minvar portfolio had us actually shorting AAPL, whereas with the target return weights, a healthy chunk of our portfolio is now in AAPL. Cool.
+
+### The efficient frontier
+
+Now that we have a minvar portfolio *and* an efficient portfolio with a return three times the minvar return, we can create a frontier between these two points that creates a minvar portfolio for every point between minvar and 3\*minvar and beyond (from -0.4 to 1.9 in the code below). Remember, an efficient portfolio is one that minimizes the risk for each target return. We're going to visualize this efficient frontier. And while what you're about to create shows the frontier of efficient portfolios, understand that there are an infinite number of *inefficient* portfolios that have the same risk but lower expected returns - those points would be *below* the visualized frontier.
+
+Again, don't get caught up too much in the details of the code at this point. It makes no sense to memorize code when there is so much open source help available. The point is to understand what it is you are trying to do, and then ask the right questions to produce viable code. This is especially true since open source code is constantly evolving. The code below is very different from the code of 30 years ago, and before that...there was little to no code.
+
+First, we'll create target returns by making combinations of the minvar and 3\*minvar portfolios.
+
+```{r}
+#| label: combine-portfolios
+#| warning: false
+
+c_seq <- seq(from = -0.4, to = 1.9, by = 0.01)
+
+res <- tibble(
+    c  = c_seq,
+    mu = NA_real_,
+    sd = NA_real_
+)
+
+for (i in seq_along(c_seq)) {
+    w         <- (1 - c_seq[i]) * mvp_weights + c_seq[i] * efp_weights
+    res$mu[i] <- 12 * 100 * as.numeric(t(w) %*% mu)
+    res$sd[i] <- 100 * sqrt(12) * as.numeric(sqrt(t(w) %*% Sigma %*% w))
+}
+```
+
+Next, we'll visualize the efficient frontier by using `ggplot2`. We'll create larger dots for the minvar and 3\*minvar portfolios for reference. We'll label our axes and title the plot so we know what it is we're seeing. Also note that in the code below we'll convert our risk and return numbers into annual expectations.
+
+We can also make the code interactive with `plotly`. Let's create a point for each stock under the efficient frontier and allow users to hover over the data for the underlying `mu` and `sigma` expectations.
+
+```{r}
+#| label: efficient-frontier-plot
+#| warning: false
+
+library(plotly)
+
+interactive_eff <- res |>
+    ggplot(aes(x = sd, y = mu)) +
+    geom_point() +
+    geom_point(data = res |> filter(c %in% c(0, 1)), size = 4) +
+    geom_point(
+        data = tibble(
+            mu = 12 * 100 * mu,
+            sd = 100 * sqrt(12) * sqrt(diag(Sigma))
+        ),
+        aes(y = mu, x = sd), size = 1
+    ) +
+    labs(
+        x     = "Annualized standard deviation (in percent)",
+        y     = "Annualized expected return (in percent)",
+        title = "Efficient frontier for DOW index constituents; 10 years of data"
+    ) +
+    theme_minimal()
+
+ggplotly(interactive_eff)
+```
+
+Note that each stock is inefficient compared to the combination of stocks efficiently represented on the frontier. Last thing - also see that the efficient frontier is incredibly efficient in that the expected return `mu` is higher than the expected risk `sigma`. This is because we are allowing short sales in our vectors of portfolio weightings. The individual stocks show `mu` and `sigma` numbers that are typical of long positions, wherein the expected return is lower than the risk to achieve that return.
+
+### Conclusion
+
+Whew. That was a lot. Take a deep breath. We're next going to move from the very technical world of investments finance and turn to those things more typical in corporate finance, like forecasting and project scenario analysis. See you there.

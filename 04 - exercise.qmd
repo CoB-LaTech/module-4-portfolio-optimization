@@ -1,0 +1,97 @@
+---
+title: "4 - exercise"
+format: 
+  html: 
+    embed-resources: true
+editor: visual
+---
+
+For this exercise, you'll build a small portfolio of your own and compute a minimum variance portfolio plus a simple efficient frontier. You'll pick the stocks, do a little data cleaning, and produce a plot. You do not need to use a full index - six names is plenty to see the math work.
+
+### 1. Load libraries
+
+Load `tidyverse`, `tidyquant`, `scales`, and `plotly`.
+
+```{r}
+#| label: load-libraries
+#| warning: false
+#| message: false
+
+# load libraries
+
+```
+
+### 2. Pick six stocks from different sectors
+
+Create a character vector `my_tickers` with six stocks. Pick across sectors - tech, energy, healthcare, consumer, financials, utilities - so we actually get some diversification. Pull ten years of daily prices.
+
+```{r}
+#| label: get-prices
+#| warning: false
+
+today   <- Sys.Date()
+years10 <- today %m-% years(10)
+
+my_tickers <- c("AAPL", "XOM", "JNJ", "KO", "JPM", "NEE")
+
+# prices <-
+
+```
+
+### 3. Build monthly returns
+
+Compute monthly returns for each stock. Use `floor_date` to collapse to month-end adjusted-close, then compute returns within symbol. Drop the first row per symbol since it has no prior month.
+
+```{r}
+#| label: monthly-returns
+#| warning: false
+
+# returns <- 
+
+```
+
+### 4. Build mu and Sigma
+
+Pivot the returns to wide format (one column per ticker), drop the month column, and compute `mu` and `Sigma`.
+
+```{r}
+#| label: mu-sigma
+#| warning: false
+
+# returns_matrix <-
+# Sigma <- 
+# mu <- 
+```
+
+### 5. Find the minimum variance portfolio
+
+Compute MVP weights and the implied portfolio mean and volatility. Print the weights in a nice tibble.
+
+```{r}
+#| label: minvar
+#| warning: false
+
+
+```
+
+### 6. Find a target-return efficient portfolio
+
+Pick a target return that is 2x the MVP expected return. Solve for the efficient portfolio weights.
+
+```{r}
+#| label: efficient-portfolio
+#| warning: false
+
+
+```
+
+### 7. Plot the efficient frontier
+
+Sweep a parameter between roughly -0.5 and 1.5, blend MVP and efficient weights, compute annualized mu and sigma for each blend, and plot. Overlay the individual stocks as dots so you can see they sit below the frontier.
+
+```{r}
+#| label: frontier-plot
+#| warning: false
+
+
+```
